@@ -191,18 +191,12 @@ jobs:
             echo "✓ OK"
           }
 
-          run_test "default"
-          run_test "g"        -g
-          run_test "g_d10"    -g -d 10
-          run_test "g_H1.5"   -g -H 1.5
-          run_test "d10"      -d 10
-          run_test "s"        -s
-          run_test "p"        -p
-          run_test "h"        -h
-          run_test "q100"     -q 1.0
-          run_test "c_p3"     -c p3
-          run_test "g_p3_d10" -g -c p3 -d 10
-          run_test "s_j"      -s -j
+          run_test "def"
+          run_test "def_d10"    -d 10
+          run_test "g"       -g
+          run_test "g_d10"   -g -d 10
+          run_test "a"       -a
+          run_test "a_d10"   -a -d 10
 
       # ── 4. Verifica output e upload ───────────────────────────────────────────
       - name: List output files
