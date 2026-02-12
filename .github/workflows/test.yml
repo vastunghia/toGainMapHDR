@@ -1,0 +1,152 @@
+# .github/workflows/test.yml
+
+name: Test toGainMapHDR
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:   # permette di avviarlo manualmente dalla UI di GitHub
+
+jobs:
+  test:
+    name: Test on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false          # continua anche se un OS fallisce
+      matrix:
+        os:
+          - macos-15
+          - macos-26            # "macos-26" = macOS 26 (Tahoe) beta runner
+
+    steps:
+
+      # ── 1. Checkout ──────────────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. Build con xcodebuild ───────────────────────────────────────────────
+      - name: Build toGainMapHDR
+        run: |
+          xcodebuild \
+            -project toGainMapHDR.xcodeproj \
+            -scheme toGainMapHDR \
+            -configuration Release \
+            -derivedDataPath build/DerivedData \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO
+
+      # ── 3. Individua il binario compilato ─────────────────────────────────────
+      - name: Locate binary
+        id: locate
+        run: |
+          BINARY=$(find build/DerivedData -name "toGainMapHDR" -type f | head -1)
+          echo "binary=$BINARY" >> "$GITHUB_OUTPUT"
+          chmod +x "$BINARY"
+          echo "Binary trovato: $BINARY"
+
+      # ── 4. Copia la .metallib vicino al binario (necessaria al runtime) ────────
+      - name: Copy GainMapKernel.ci.metallib
+        run: |
+          BINARY_DIR=$(dirname "${{ steps.locate.outputs.binary }}")
+          cp bin/GainMapKernel.ci.metallib "$BINARY_DIR/"
+
+      # ── 5. Prepara cartelle di output ─────────────────────────────────────────
+      - name: Prepare output directory
+        run: mkdir -p test_outputs
+
+      # ── 6. Definisce la label dell'OS per i nomi file ─────────────────────────
+      - name: Set OS label
+        id: oslabel
+        run: |
+          RAW="${{ matrix.os }}"             # es. "macos-15"
+          LABEL="${RAW//-/_}"               # → "macos_15"
+          echo "label=$LABEL" >> "$GITHUB_OUTPUT"
+
+      # ── 7. Esegui i test ──────────────────────────────────────────────────────
+      #
+      #  INPUT: il file HDR di test (modifica il percorso se necessario)
+      #  OUTPUT: cartella test_outputs/
+      #  NOME FILE: generato con il flag -t che aggiunge un suffisso al nome base
+      #
+      - name: Run tests
+        env:
+          BIN: ${{ steps.locate.outputs.binary }}
+          OS_LABEL: ${{ steps.oslabel.outputs.label }}
+          INPUT: tests/fixtures/test_input.tiff   # ← adatta se usi un altro file
+          OUTDIR: test_outputs
+        run: |
+          set -e
+
+          # Helper: esegue il tool e stampa esito
+          run_test() {
+            local suffix="$1"
+            shift
+            local flags=("$@")
+            echo "──────────────────────────────────────────"
+            echo "▶ Test: $suffix  |  flags: ${flags[*]}"
+            "$BIN" "$INPUT" "$OUTDIR" "${flags[@]}" -t "${OS_LABEL}_${suffix}"
+            echo "✓ Completato"
+          }
+
+          # ── Casi di test ──────────────────────────────────────────────────
+          # 1. Default (ISO Gain Map HDR, 8 bit)
+          run_test "default"
+
+          # 2. Apple Gain Map (-g)
+          run_test "g" -g
+
+          # 3. Apple Gain Map 10 bit (-g -d 10)
+          run_test "g_d10" -g -d 10
+
+          # 4. Apple Gain Map + scaling (-g -H 1.5)
+          run_test "g_H1.5" -g -H 1.5
+
+          # 5. ISO Gain Map 10 bit (-d 10)
+          run_test "d10"  -d 10
+
+          # 6. SDR tone-mapped (-s)
+          run_test "s" -s
+
+          # 7. PQ HDR 10 bit (-p)
+          run_test "p" -p
+
+          # 8. HLG HDR 10 bit (-h)
+          run_test "h" -h
+
+          # 9. Qualità alta (-q 1.0)
+          run_test "q100" -q 1.0
+
+          # 10. Colore P3 (-c p3)
+          run_test "c_p3" -c p3
+
+          # 11. Combinazione: Apple GM + P3 + 10 bit
+          run_test "g_p3_d10" -g -c p3 -d 10
+
+      # ── 8. Lista i file prodotti ───────────────────────────────────────────────
+      - name: List output files
+        run: |
+          echo "File prodotti:"
+          ls -lh test_outputs/
+
+      # ── 9. Verifica che siano stati creati file di output ─────────────────────
+      - name: Assert outputs exist
+        run: |
+          COUNT=$(ls test_outputs/*.heic test_outputs/*.jpg 2>/dev/null | wc -l | tr -d ' ')
+          echo "File di output trovati: $COUNT"
+          if [ "$COUNT" -lt 1 ]; then
+            echo "ERROR: Nessun file di output generato!"
+            exit 1
+          fi
+
+      # ── 10. Upload degli artefatti ────────────────────────────────────────────
+      - name: Upload test outputs
+        uses: actions/upload-artifact@v4
+        if: always()    # carica anche in caso di errore parziale
+        with:
+          name: test-outputs-${{ matrix.os }}
+          path: test_outputs/
+          retention-days: 30
