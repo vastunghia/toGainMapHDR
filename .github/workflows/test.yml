@@ -49,16 +49,18 @@ jobs:
           echo "name=$SCHEME" >> "$GITHUB_OUTPUT"
 
       # ── 4. Build ──────────────────────────────────────────────────────────────
-      - name: Build toGainMapHDR
-        run: |
-          xcodebuild \
-            -project toGainMapHDR.xcodeproj \
-            -scheme "${{ steps.scheme.outputs.name }}" \
-            -configuration Release \
-            -derivedDataPath build/DerivedData \
-            CODE_SIGN_IDENTITY="" \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGNING_ALLOWED=NO
+- name: Build toGainMapHDR
+  run: |
+    set -o pipefail
+    xcodebuild \
+      -project toGainMapHDR.xcodeproj \
+      -scheme "${{ steps.scheme.outputs.name }}" \
+      -configuration Release \
+      -derivedDataPath build/DerivedData \
+      CODE_SIGN_IDENTITY="" \
+      CODE_SIGNING_REQUIRED=NO \
+      CODE_SIGNING_ALLOWED=NO \
+    2>&1 | tee build_log.txt || (grep -E "error:|warning:|note:" build_log.txt; exit 1)
 
       # ── 5. Individua il binario compilato ─────────────────────────────────────
       - name: Locate binary
