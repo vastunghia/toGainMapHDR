@@ -6,149 +6,149 @@
 name: Test toGainMapHDR
 
 on:
-	# push:
-	#   branches: [ main ]
-	# pull_request:
-	#   branches: [ main ]
-	workflow_dispatch:
+  # push:
+  #   branches: [ main ]
+  # pull_request:
+  #   branches: [ main ]
+  workflow_dispatch:
 
 jobs:
-	test:
-		name: Test on ${{ matrix.os }}
-		runs-on: ${{ matrix.os }}
+  test:
+    name: Test on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
 
-		strategy:
-			fail-fast: false
-			matrix:
-				os:
-					- macos-15
-					- macos-26
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - macos-15
+          - macos-26
 
-		steps:
+    steps:
 
-			# ── 1. Checkout ──────────────────────────────────────────────────────────
-			- name: Checkout repository
-				uses: actions/checkout@v4
+      # ── 1. Checkout ──────────────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-			# ── 2. Mostra gli scheme disponibili (utile per debug) ────────────────────
-			- name: List Xcode schemes
-				run: |
-					echo "══ xcodebuild -list ══"
-					xcodebuild -project toGainMapHDR.xcodeproj -list
-					echo "══════════════════════"
+      # ── 2. Mostra gli scheme disponibili (utile per debug) ────────────────────
+      - name: List Xcode schemes
+        run: |
+          echo "══ xcodebuild -list ══"
+          xcodebuild -project toGainMapHDR.xcodeproj -list
+          echo "══════════════════════"
 
-			# ── 3. Ricava automaticamente il nome del primo scheme disponibile ─────────
-			- name: Detect scheme name
-				id: scheme
-				run: |
-					SCHEME=$(
-						xcodebuild -project toGainMapHDR.xcodeproj -list 2>/dev/null \
-							| awk '/Schemes:/{ found=1; next } found && /^[[:space:]]+[^[:space:]]/ { gsub(/^[[:space:]]+/,"",$0); print; exit }'
-					)
-					echo "Scheme rilevato: '$SCHEME'"
-					echo "name=$SCHEME" >> "$GITHUB_OUTPUT"
+      # ── 3. Ricava automaticamente il nome del primo scheme disponibile ─────────
+      - name: Detect scheme name
+        id: scheme
+        run: |
+          SCHEME=$(
+            xcodebuild -project toGainMapHDR.xcodeproj -list 2>/dev/null \
+              | awk '/Schemes:/{ found=1; next } found && /^[[:space:]]+[^[:space:]]/ { gsub(/^[[:space:]]+/,"",$0); print; exit }'
+          )
+          echo "Scheme rilevato: '$SCHEME'"
+          echo "name=$SCHEME" >> "$GITHUB_OUTPUT"
 
-			# ── 4. Build ──────────────────────────────────────────────────────────────
-			- name: Build toGainMapHDR
-				run: |
-					set -o pipefail
-					xcodebuild \
-						-project toGainMapHDR.xcodeproj \
-						-scheme "${{ steps.scheme.outputs.name }}" \
-						-configuration Release \
-						-derivedDataPath build/DerivedData \
-						CODE_SIGN_IDENTITY="" \
-						CODE_SIGNING_REQUIRED=NO \
-						CODE_SIGNING_ALLOWED=NO \
-					2>&1 | tee build_log.txt || (grep -E "error:|warning:|note:" build_log.txt; exit 1)
+      # ── 4. Build ──────────────────────────────────────────────────────────────
+      - name: Build toGainMapHDR
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project toGainMapHDR.xcodeproj \
+            -scheme "${{ steps.scheme.outputs.name }}" \
+            -configuration Release \
+            -derivedDataPath build/DerivedData \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+          2>&1 | tee build_log.txt || (grep -E "error:|warning:" build_log.txt; exit 1)
 
-			# ── 5. Individua il binario compilato ─────────────────────────────────────
-			- name: Locate binary
-				id: locate
-				run: |
-					BINARY=$(find build/DerivedData -name "toGainMapHDR" -type f | head -1)
-					if [ -z "$BINARY" ]; then
-						echo "ERROR: binario non trovato dopo la build!"
-						find build/DerivedData -type f | head -30
-						exit 1
-					fi
-					echo "binary=$BINARY" >> "$GITHUB_OUTPUT"
-					chmod +x "$BINARY"
-					echo "Binary trovato: $BINARY"
+      # ── 5. Individua il binario compilato ─────────────────────────────────────
+      - name: Locate binary
+        id: locate
+        run: |
+          BINARY=$(find build/DerivedData -name "toGainMapHDR" -type f | head -1)
+          if [ -z "$BINARY" ]; then
+            echo "ERROR: binario non trovato dopo la build!"
+            find build/DerivedData -type f | head -30
+            exit 1
+          fi
+          echo "binary=$BINARY" >> "$GITHUB_OUTPUT"
+          chmod +x "$BINARY"
+          echo "Binary trovato: $BINARY"
 
-			# ── 6. Copia la .metallib vicino al binario ───────────────────────────────
-			- name: Copy GainMapKernel.ci.metallib
-				run: |
-					BINARY_DIR=$(dirname "${{ steps.locate.outputs.binary }}")
-					cp bin/GainMapKernel.ci.metallib "$BINARY_DIR/"
+      # ── 6. Copia la .metallib vicino al binario ───────────────────────────────
+      - name: Copy GainMapKernel.ci.metallib
+        run: |
+          BINARY_DIR=$(dirname "${{ steps.locate.outputs.binary }}")
+          cp bin/GainMapKernel.ci.metallib "$BINARY_DIR/"
 
-			# ── 7. Prepara cartella di output ─────────────────────────────────────────
-			- name: Prepare output directory
-				run: mkdir -p test_outputs
+      # ── 7. Prepara cartella di output ─────────────────────────────────────────
+      - name: Prepare output directory
+        run: mkdir -p test_outputs
 
-			# ── 8. Definisce la label dell'OS per i nomi file ─────────────────────────
-			- name: Set OS label
-				id: oslabel
-				run: |
-					RAW="${{ matrix.os }}"
-					LABEL="${RAW//-/_}"
-					echo "label=$LABEL" >> "$GITHUB_OUTPUT"
+      # ── 8. Definisce la label dell'OS per i nomi file ─────────────────────────
+      - name: Set OS label
+        id: oslabel
+        run: |
+          RAW="${{ matrix.os }}"
+          LABEL="${RAW//-/_}"
+          echo "label=$LABEL" >> "$GITHUB_OUTPUT"
 
-			# ── 9. Esegui i test ──────────────────────────────────────────────────────
-			- name: Run tests
-				env:
-					BIN: ${{ steps.locate.outputs.binary }}
-					OS_LABEL: ${{ steps.oslabel.outputs.label }}
-					INPUT: tests/fixtures/test_input.png
-					OUTDIR: test_outputs
-				run: |
-					set -e
+      # ── 9. Esegui i test ──────────────────────────────────────────────────────
+      - name: Run tests
+        env:
+          BIN: ${{ steps.locate.outputs.binary }}
+          OS_LABEL: ${{ steps.oslabel.outputs.label }}
+          INPUT: tests/fixtures/test_input.png
+          OUTDIR: test_outputs
+        run: |
+          set -e
 
-					run_test() {
-						local suffix="$1"
-						shift
-						local flags=("$@")
-						echo "──────────────────────────────────────────"
-						echo "▶ Test: $suffix  |  flags: ${flags[*]}"
-						"$BIN" "$INPUT" "$OUTDIR" "${flags[@]}" -t "${OS_LABEL}_${suffix}"
-						echo "✓ OK"
-					}
+          run_test() {
+            local suffix="$1"
+            shift
+            local flags=("$@")
+            echo "──────────────────────────────────────────"
+            echo "▶ Test: $suffix  |  flags: ${flags[*]}"
+            "$BIN" "$INPUT" "$OUTDIR" "${flags[@]}" -t "${OS_LABEL}_${suffix}"
+            echo "✓ OK"
+          }
 
-					run_test "default"
-					run_test "g"        -g
-					run_test "g_d10"    -g -d 10
-					run_test "g_H1.5"   -g -H 1.5
-					run_test "d10"      -d 10
-					run_test "s"        -s
-					run_test "p"        -p
-					run_test "h"        -h
-					run_test "q100"     -q 1.0
-					run_test "c_p3"     -c p3
-					run_test "g_p3_d10" -g -c p3 -d 10
-					run_test "s_j"      -s -j
+          run_test "default"
+          run_test "g"        -g
+          run_test "g_d10"    -g -d 10
+          run_test "g_H1.5"   -g -H 1.5
+          run_test "d10"      -d 10
+          run_test "s"        -s
+          run_test "p"        -p
+          run_test "h"        -h
+          run_test "q100"     -q 1.0
+          run_test "c_p3"     -c p3
+          run_test "g_p3_d10" -g -c p3 -d 10
+          run_test "s_j"      -s -j
 
-			# ── 10. Lista i file prodotti ─────────────────────────────────────────────
-			- name: List output files
-				run: |
-					echo "══════════ Output files ══════════"
-					ls -lh test_outputs/
-					echo "══════════════════════════════════"
+      # ── 10. Lista i file prodotti ─────────────────────────────────────────────
+      - name: List output files
+        run: |
+          echo "══════════ Output files ══════════"
+          ls -lh test_outputs/
+          echo "══════════════════════════════════"
 
-			# ── 11. Verifica che almeno un file sia stato generato ────────────────────
-			- name: Assert outputs exist
-				run: |
-					COUNT=$(find test_outputs -type f \( -name "*.heic" -o -name "*.jpg" \) | wc -l | tr -d ' ')
-					echo "File di output trovati: $COUNT"
-					if [ "$COUNT" -lt 1 ]; then
-						echo "ERROR: Nessun file di output generato!"
-						exit 1
-					fi
+      # ── 11. Verifica che almeno un file sia stato generato ────────────────────
+      - name: Assert outputs exist
+        run: |
+          COUNT=$(find test_outputs -type f \( -name "*.heic" -o -name "*.jpg" \) | wc -l | tr -d ' ')
+          echo "File di output trovati: $COUNT"
+          if [ "$COUNT" -lt 1 ]; then
+            echo "ERROR: Nessun file di output generato!"
+            exit 1
+          fi
 
-			# ── 12. Upload degli artefatti ────────────────────────────────────────────
-			- name: Upload test outputs
-				uses: actions/upload-artifact@v4
-				if: always()
-				with:
-					name: test-outputs-${{ matrix.os }}
-					path: test_outputs/
-					retention-days: 30
+      # ── 12. Upload degli artefatti ────────────────────────────────────────────
+      - name: Upload test outputs
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-outputs-${{ matrix.os }}
+          path: test_outputs/
+          retention-days: 30
