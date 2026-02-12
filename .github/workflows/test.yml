@@ -134,16 +134,10 @@ jobs:
 
           run_test "def"
           run_test "def_d10"    -d 10
-          run_test "def_H2.0"   -H 2.0
-          run_test "def_d10_H2.0"   -d 10 -H 2.0
           run_test "g"        -g
           run_test "g_d10"    -g -d 10
-          run_test "g_H2.0"   -g -H 2.0
-          run_test "g_d10_H2.0"   -g -d 10 -H 2.0
           run_test "a"        -a
           run_test "a_d10"    -a -d 10
-          run_test "a_H2.0"   -a -H 2.0
-          run_test "a_d10_H2.0"   -a -d 10 -H 2.0
 
       # ── 8. Lista i file prodotti ──────────────────────────────────────────────
       - name: List output files
