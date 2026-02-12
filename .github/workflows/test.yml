@@ -1,12 +1,21 @@
 # .github/workflows/test.yml
 #
-# Test automatici per toGainMapHDR
-# Eseguiti su macOS 15.x e macOS 26.x tramite GitHub Actions
+# Test automatici per toGainMapHDR — workflow unico in due job sequenziali
 #
-# Strategia binari:
-#   macOS 15 → usa il binario precompilato in bin/toGainMapHDR
-#              (il codice sorgente usa API macOS 26 e non compila con SDK 15)
-#   macOS 26 → compila dai sorgenti tramite xcodebuild
+# Flusso:
+#   Job 1 [build-and-test] su macOS 26:
+#     - compila dai sorgenti
+#     - esegue tutti i test
+#     - carica come artifact: immagini di output + binario compilato
+#
+#   Job 2 [test-macos15] su macOS 15:
+#     - parte solo dopo che il job 1 è completato con successo
+#     - scarica il binario prodotto dal job 1
+#     - esegue tutti i test con quel binario
+#     - carica come artifact: immagini di output
+#
+# In questo modo entrambi i job usano esattamente lo stesso binario,
+# compilato dalla HEAD corrente, senza dipendere da binari pre-committati.
 
 name: Test toGainMapHDR
 
@@ -15,19 +24,20 @@ on:
   #   branches: [ main ]
   # pull_request:
   #   branches: [ main ]
-  workflow_dispatch:
+  # workflow_dispatch:
+
+# Helper riutilizzabile: lista dei casi di test.
+# Non esiste un costrutto "anchor YAML" in Actions, quindi la lista
+# è duplicata nei due job — se aggiungi casi, aggiornali in entrambi.
 
 jobs:
-  test:
-    name: Test on ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
 
-    strategy:
-      fail-fast: false
-      matrix:
-        os:
-          - macos-15
-          - macos-26
+  # ════════════════════════════════════════════════════════════════════════════
+  # JOB 1 — Build dai sorgenti + test su macOS 26
+  # ════════════════════════════════════════════════════════════════════════════
+  build-and-test:
+    name: Build & Test on macos-26
+    runs-on: macos-26
 
     steps:
 
@@ -35,10 +45,9 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ── 2a. [macOS 26] Ricava il nome dello scheme ────────────────────────────
-      - name: Detect scheme name (macOS 26 only)
+      # ── 2. Ricava il nome dello scheme ────────────────────────────────────────
+      - name: Detect scheme name
         id: scheme
-        if: matrix.os == 'macos-26'
         run: |
           SCHEME=$(
             xcodebuild -project toGainMapHDR.xcodeproj -list 2>/dev/null \
@@ -47,9 +56,8 @@ jobs:
           echo "Scheme rilevato: '$SCHEME'"
           echo "name=$SCHEME" >> "$GITHUB_OUTPUT"
 
-      # ── 2b. [macOS 26] Build dai sorgenti ─────────────────────────────────────
-      - name: Build from source (macOS 26 only)
-        if: matrix.os == 'macos-26'
+      # ── 3. Build dai sorgenti ─────────────────────────────────────────────────
+      - name: Build from source
         run: |
           set -o pipefail
           xcodebuild \
@@ -60,71 +68,50 @@ jobs:
             CODE_SIGN_IDENTITY="" \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO \
-          2>&1 | tee build_log.txt || (grep -E "^.*error:" build_log.txt; exit 1)
+          2>&1 | tee build_log.txt || (grep -E "error:" build_log.txt; exit 1)
 
-      # ── 3a. [macOS 26] Individua e registra il binario appena compilato ───────
-      - name: Locate compiled binary (macOS 26 only)
-        id: locate_compiled
-        if: matrix.os == 'macos-26'
+      # ── 4. Individua il binario e prepara la staging area ─────────────────────
+      - name: Locate binary and stage artifacts
+        id: locate
         run: |
           BINARY=$(find build/DerivedData -name "toGainMapHDR" -type f | head -1)
           if [ -z "$BINARY" ]; then
             echo "ERROR: binario non trovato dopo la build!"
-            find build/DerivedData -type f | head -30
             exit 1
           fi
           chmod +x "$BINARY"
           echo "binary=$BINARY" >> "$GITHUB_OUTPUT"
-          echo "Binary compilato: $BINARY"
-          # Copia la .metallib nella stessa directory del binario (richiesta a runtime)
-          cp bin/GainMapKernel.ci.metallib "$(dirname "$BINARY")/"
 
-      # ── 3b. [macOS 15] Usa il binario precompilato dal repo ───────────────────
-      - name: Use prebuilt binary (macOS 15 only)
-        id: locate_prebuilt
-        if: matrix.os == 'macos-15'
-        run: |
-          BINARY="bin/toGainMapHDR"
-          chmod +x "$BINARY"
-          echo "binary=$BINARY" >> "$GITHUB_OUTPUT"
-          echo "Binario precompilato: $BINARY"
-          # La .metallib è già nella stessa cartella bin/, nessuna copia necessaria
+          # Crea una cartella di staging che conterrà binario + metallib insieme:
+          # quando il job 2 scaricherà l'artifact, li troverà già affiancati
+          # nella stessa directory, così il tool può trovare la metallib a runtime.
+          mkdir -p staging
+          cp "$BINARY" staging/toGainMapHDR
+          cp bin/GainMapKernel.ci.metallib staging/
 
-      # ── 4. Unifica il percorso del binario nei due casi ───────────────────────
-      - name: Set binary path
-        id: binary
-        run: |
-          if [ "${{ matrix.os }}" = "macos-26" ]; then
-            echo "path=${{ steps.locate_compiled.outputs.binary }}" >> "$GITHUB_OUTPUT"
-          else
-            echo "path=${{ steps.locate_prebuilt.outputs.binary }}" >> "$GITHUB_OUTPUT"
-          fi
+      # ── 5. Carica il binario come artifact (verrà usato dal job 2) ────────────
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: binary-macos26
+          path: staging/
+          retention-days: 7    # serve solo per la durata della pipeline
 
-      # ── 5. Prepara cartella di output ─────────────────────────────────────────
+      # ── 6. Prepara cartella di output e lancia i test ────────────────────────
       - name: Prepare output directory
         run: mkdir -p test_outputs
 
-      # ── 6. Definisce la label dell'OS per i nomi file ─────────────────────────
-      - name: Set OS label
-        id: oslabel
-        run: |
-          RAW="${{ matrix.os }}"
-          LABEL="${RAW//-/_}"
-          echo "label=$LABEL" >> "$GITHUB_OUTPUT"
-
-      # ── 7. Esegui i test ──────────────────────────────────────────────────────
       - name: Run tests
         env:
-          BIN: ${{ steps.binary.outputs.path }}
-          OS_LABEL: ${{ steps.oslabel.outputs.label }}
+          BIN: ${{ steps.locate.outputs.binary }}
+          OS_LABEL: macos_26
           INPUT: tests/fixtures/test_input.png
           OUTDIR: test_outputs
         run: |
           set -e
 
           run_test() {
-            local suffix="$1"
-            shift
+            local suffix="$1"; shift
             local flags=("$@")
             echo "──────────────────────────────────────────"
             echo "▶ Test: $suffix  |  flags: ${flags[*]}"
@@ -132,35 +119,111 @@ jobs:
             echo "✓ OK"
           }
 
-          run_test "def"
-          run_test "def_d10"    -d 10
+          run_test "default"
           run_test "g"        -g
           run_test "g_d10"    -g -d 10
-          run_test "a"        -a
-          run_test "a_d10"    -a -d 10
+          run_test "g_H1.5"   -g -H 1.5
+          run_test "d10"      -d 10
+          run_test "s"        -s
+          run_test "p"        -p
+          run_test "h"        -h
+          run_test "q100"     -q 1.0
+          run_test "c_p3"     -c p3
+          run_test "g_p3_d10" -g -c p3 -d 10
+          run_test "s_j"      -s -j
 
-      # ── 8. Lista i file prodotti ──────────────────────────────────────────────
+      # ── 7. Verifica output e upload ───────────────────────────────────────────
       - name: List output files
-        run: |
-          echo "══════════ Output files ══════════"
-          ls -lh test_outputs/
-          echo "══════════════════════════════════"
+        run: ls -lh test_outputs/
 
-      # ── 9. Verifica che almeno un file sia stato generato ─────────────────────
       - name: Assert outputs exist
         run: |
           COUNT=$(find test_outputs -type f \( -name "*.heic" -o -name "*.jpg" \) | wc -l | tr -d ' ')
           echo "File di output trovati: $COUNT"
-          if [ "$COUNT" -lt 1 ]; then
-            echo "ERROR: Nessun file di output generato!"
-            exit 1
-          fi
+          [ "$COUNT" -ge 1 ] || (echo "ERROR: nessun output generato!"; exit 1)
 
-      # ── 10. Upload degli artefatti ────────────────────────────────────────────
-      - name: Upload test outputs
+      - name: Upload test outputs (macos-26)
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: test-outputs-${{ matrix.os }}
+          name: test-outputs-macos-26
+          path: test_outputs/
+          retention-days: 30
+
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # JOB 2 — Test su macOS 15 con il binario prodotto dal job 1
+  # ════════════════════════════════════════════════════════════════════════════
+  test-macos15:
+    name: Test on macos-15
+    runs-on: macos-15
+    needs: build-and-test    # parte solo dopo che il job 1 è completato
+
+    steps:
+
+      # ── 1. Checkout (serve per avere il file di input dei test) ───────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. Scarica il binario prodotto dal job 1 ─────────────────────────────
+      - name: Download binary artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: binary-macos26
+          path: staging/
+
+      - name: Make binary executable
+        run: chmod +x staging/toGainMapHDR
+
+      # ── 3. Prepara cartella di output e lancia i test ────────────────────────
+      - name: Prepare output directory
+        run: mkdir -p test_outputs
+
+      - name: Run tests
+        env:
+          BIN: staging/toGainMapHDR
+          OS_LABEL: macos_15
+          INPUT: tests/fixtures/test_input.png
+          OUTDIR: test_outputs
+        run: |
+          set -e
+
+          run_test() {
+            local suffix="$1"; shift
+            local flags=("$@")
+            echo "──────────────────────────────────────────"
+            echo "▶ Test: $suffix  |  flags: ${flags[*]}"
+            "$BIN" "$INPUT" "$OUTDIR" "${flags[@]}" -t "${OS_LABEL}_${suffix}"
+            echo "✓ OK"
+          }
+
+          run_test "default"
+          run_test "g"        -g
+          run_test "g_d10"    -g -d 10
+          run_test "g_H1.5"   -g -H 1.5
+          run_test "d10"      -d 10
+          run_test "s"        -s
+          run_test "p"        -p
+          run_test "h"        -h
+          run_test "q100"     -q 1.0
+          run_test "c_p3"     -c p3
+          run_test "g_p3_d10" -g -c p3 -d 10
+          run_test "s_j"      -s -j
+
+      # ── 4. Verifica output e upload ───────────────────────────────────────────
+      - name: List output files
+        run: ls -lh test_outputs/
+
+      - name: Assert outputs exist
+        run: |
+          COUNT=$(find test_outputs -type f \( -name "*.heic" -o -name "*.jpg" \) | wc -l | tr -d ' ')
+          echo "File di output trovati: $COUNT"
+          [ "$COUNT" -ge 1 ] || (echo "ERROR: nessun output generato!"; exit 1)
+
+      - name: Upload test outputs (macos-15)
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-outputs-macos-15
           path: test_outputs/
           retention-days: 30
