@@ -24,7 +24,7 @@ on:
   #   branches: [ main ]
   # pull_request:
   #   branches: [ main ]
-  # workflow_dispatch:
+  workflow_dispatch:
 
 # Helper riutilizzabile: lista dei casi di test.
 # Non esiste un costrutto "anchor YAML" in Actions, quindi la lista
