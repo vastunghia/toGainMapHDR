@@ -117,7 +117,7 @@ jobs:
         env:
           BIN: ${{ steps.binary.outputs.path }}
           OS_LABEL: ${{ steps.oslabel.outputs.label }}
-          INPUT: tests/fixtures/test_input.tiff
+          INPUT: tests/fixtures/test_input.png
           OUTDIR: test_outputs
         run: |
           set -e
