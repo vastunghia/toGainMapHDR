@@ -76,7 +76,7 @@ jobs:
         env:
           BIN: ${{ steps.locate.outputs.binary }}
           OS_LABEL: ${{ steps.oslabel.outputs.label }}
-          INPUT: tests/fixtures/test_input.tiff   # ← adatta se usi un altro file
+          INPUT: tests/fixtures/test_input.png   # ← adatta se usi un altro file
           OUTDIR: test_outputs
         run: |
           set -e
