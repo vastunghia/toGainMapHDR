@@ -2,6 +2,11 @@
 #
 # Test automatici per toGainMapHDR
 # Eseguiti su macOS 15.x e macOS 26.x tramite GitHub Actions
+#
+# Strategia binari:
+#   macOS 15 → usa il binario precompilato in bin/toGainMapHDR
+#              (il codice sorgente usa API macOS 26 e non compila con SDK 15)
+#   macOS 26 → compila dai sorgenti tramite xcodebuild
 
 name: Test toGainMapHDR
 
@@ -30,16 +35,10 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ── 2. Mostra gli scheme disponibili (utile per debug) ────────────────────
-      - name: List Xcode schemes
-        run: |
-          echo "══ xcodebuild -list ══"
-          xcodebuild -project toGainMapHDR.xcodeproj -list
-          echo "══════════════════════"
-
-      # ── 3. Ricava automaticamente il nome del primo scheme disponibile ─────────
-      - name: Detect scheme name
+      # ── 2a. [macOS 26] Ricava il nome dello scheme ────────────────────────────
+      - name: Detect scheme name (macOS 26 only)
         id: scheme
+        if: matrix.os == 'macos-26'
         run: |
           SCHEME=$(
             xcodebuild -project toGainMapHDR.xcodeproj -list 2>/dev/null \
@@ -48,8 +47,9 @@ jobs:
           echo "Scheme rilevato: '$SCHEME'"
           echo "name=$SCHEME" >> "$GITHUB_OUTPUT"
 
-      # ── 4. Build ──────────────────────────────────────────────────────────────
-      - name: Build toGainMapHDR
+      # ── 2b. [macOS 26] Build dai sorgenti ─────────────────────────────────────
+      - name: Build from source (macOS 26 only)
+        if: matrix.os == 'macos-26'
         run: |
           set -o pipefail
           xcodebuild \
@@ -57,15 +57,15 @@ jobs:
             -scheme "${{ steps.scheme.outputs.name }}" \
             -configuration Release \
             -derivedDataPath build/DerivedData \
-            MACOSX_DEPLOYMENT_TARGET=15.0 \
             CODE_SIGN_IDENTITY="" \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO \
-          2>&1 | tee build_log.txt || (grep -E "error:|warning:" build_log.txt; exit 1)
+          2>&1 | tee build_log.txt || (grep -E "^.*error:" build_log.txt; exit 1)
 
-      # ── 5. Individua il binario compilato ─────────────────────────────────────
-      - name: Locate binary
-        id: locate
+      # ── 3a. [macOS 26] Individua e registra il binario appena compilato ───────
+      - name: Locate compiled binary (macOS 26 only)
+        id: locate_compiled
+        if: matrix.os == 'macos-26'
         run: |
           BINARY=$(find build/DerivedData -name "toGainMapHDR" -type f | head -1)
           if [ -z "$BINARY" ]; then
@@ -73,21 +73,38 @@ jobs:
             find build/DerivedData -type f | head -30
             exit 1
           fi
-          echo "binary=$BINARY" >> "$GITHUB_OUTPUT"
           chmod +x "$BINARY"
-          echo "Binary trovato: $BINARY"
+          echo "binary=$BINARY" >> "$GITHUB_OUTPUT"
+          echo "Binary compilato: $BINARY"
+          # Copia la .metallib nella stessa directory del binario (richiesta a runtime)
+          cp bin/GainMapKernel.ci.metallib "$(dirname "$BINARY")/"
 
-      # ── 6. Copia la .metallib vicino al binario ───────────────────────────────
-      - name: Copy GainMapKernel.ci.metallib
+      # ── 3b. [macOS 15] Usa il binario precompilato dal repo ───────────────────
+      - name: Use prebuilt binary (macOS 15 only)
+        id: locate_prebuilt
+        if: matrix.os == 'macos-15'
         run: |
-          BINARY_DIR=$(dirname "${{ steps.locate.outputs.binary }}")
-          cp bin/GainMapKernel.ci.metallib "$BINARY_DIR/"
+          BINARY="bin/toGainMapHDR"
+          chmod +x "$BINARY"
+          echo "binary=$BINARY" >> "$GITHUB_OUTPUT"
+          echo "Binario precompilato: $BINARY"
+          # La .metallib è già nella stessa cartella bin/, nessuna copia necessaria
 
-      # ── 7. Prepara cartella di output ─────────────────────────────────────────
+      # ── 4. Unifica il percorso del binario nei due casi ───────────────────────
+      - name: Set binary path
+        id: binary
+        run: |
+          if [ "${{ matrix.os }}" = "macos-26" ]; then
+            echo "path=${{ steps.locate_compiled.outputs.binary }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "path=${{ steps.locate_prebuilt.outputs.binary }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      # ── 5. Prepara cartella di output ─────────────────────────────────────────
       - name: Prepare output directory
         run: mkdir -p test_outputs
 
-      # ── 8. Definisce la label dell'OS per i nomi file ─────────────────────────
+      # ── 6. Definisce la label dell'OS per i nomi file ─────────────────────────
       - name: Set OS label
         id: oslabel
         run: |
@@ -95,12 +112,12 @@ jobs:
           LABEL="${RAW//-/_}"
           echo "label=$LABEL" >> "$GITHUB_OUTPUT"
 
-      # ── 9. Esegui i test ──────────────────────────────────────────────────────
+      # ── 7. Esegui i test ──────────────────────────────────────────────────────
       - name: Run tests
         env:
-          BIN: ${{ steps.locate.outputs.binary }}
+          BIN: ${{ steps.binary.outputs.path }}
           OS_LABEL: ${{ steps.oslabel.outputs.label }}
-          INPUT: tests/fixtures/test_input.png
+          INPUT: tests/fixtures/test_input.tiff
           OUTDIR: test_outputs
         run: |
           set -e
@@ -128,14 +145,14 @@ jobs:
           run_test "g_p3_d10" -g -c p3 -d 10
           run_test "s_j"      -s -j
 
-      # ── 10. Lista i file prodotti ─────────────────────────────────────────────
+      # ── 8. Lista i file prodotti ──────────────────────────────────────────────
       - name: List output files
         run: |
           echo "══════════ Output files ══════════"
           ls -lh test_outputs/
           echo "══════════════════════════════════"
 
-      # ── 11. Verifica che almeno un file sia stato generato ────────────────────
+      # ── 9. Verifica che almeno un file sia stato generato ─────────────────────
       - name: Assert outputs exist
         run: |
           COUNT=$(find test_outputs -type f \( -name "*.heic" -o -name "*.jpg" \) | wc -l | tr -d ' ')
@@ -145,7 +162,7 @@ jobs:
             exit 1
           fi
 
-      # ── 12. Upload degli artefatti ────────────────────────────────────────────
+      # ── 10. Upload degli artefatti ────────────────────────────────────────────
       - name: Upload test outputs
         uses: actions/upload-artifact@v4
         if: always()
