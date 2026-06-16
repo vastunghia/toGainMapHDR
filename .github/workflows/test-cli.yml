@@ -79,3 +79,47 @@ jobs:
           name: heic-${{ matrix.mode.name }}-${{ matrix.image }}
           path: out/${{ matrix.mode.name }}/*.heic
           if-no-files-found: error
+
+  build-binary:
+    runs-on: macos-26
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Show toolchain
+        run: |
+          sw_vers
+          xcodebuild -version
+
+      - name: Build universal binary (Release, arm64 + x86_64)
+        run: |
+          xcodebuild \
+            -project toGainMapHDR.xcodeproj \
+            -scheme build_for_release \
+            -configuration Release \
+            -derivedDataPath build \
+            ARCHS="arm64 x86_64" ONLY_ACTIVE_ARCH=NO \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
+            build
+
+      - name: Stage binary and Metal kernels
+        run: |
+          set -euo pipefail
+          DIR="build/Build/Products/Release"
+          test -x "$DIR/toGainMapHDR" || { echo "::error::binary not found"; exit 1; }
+          echo "Architectures:"; lipo -archs "$DIR/toGainMapHDR"
+          mkdir -p dist
+          cp "$DIR/toGainMapHDR" dist/
+          for lib in GainMapKernel.ci.metallib RGBGainMapKernel.ci.metallib; do
+            test -f "$DIR/$lib" || { echo "::error::$lib not produced by build"; exit 1; }
+            cp "$DIR/$lib" dist/
+          done
+          ls -la dist
+
+      - name: Upload binary bundle
+        uses: actions/upload-artifact@v5
+        with:
+          name: toGainMapHDR-bin
+          path: dist/*
+          if-no-files-found: error
