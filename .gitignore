@@ -1,3 +1,7 @@
 
 .DS_Store
 *.xcuserstate
+
+# Full-resolution test originals (exceed GitHub's 100 MB limit; use *_halved.png in CI)
+TestAssets/test_in.png
+TestAssets/test_in_desert.png

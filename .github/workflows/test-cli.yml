@@ -1,0 +1,81 @@
+name: Test CLI on macOS 26
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  convert:
+    runs-on: macos-26
+
+    strategy:
+      fail-fast: false
+      matrix:
+        image:
+          - test_in_halved.png
+          - test_in_desert_halved.png
+        mode:
+          # name -> used for output dir / artifact; flag -> extra export flag
+          - { name: iso-rgb,       flag: "" }    # default: ISO gain map (RGB)
+          - { name: apple-gainmap, flag: "-g" }  # Apple gain map HDR
+          - { name: iso-mono,      flag: "-m" }  # ISO gain map (monochrome)
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show toolchain
+        run: |
+          sw_vers
+          xcodebuild -version
+
+      - name: Build (Release)
+        run: |
+          xcodebuild \
+            -project toGainMapHDR.xcodeproj \
+            -scheme build_for_release \
+            -configuration Release \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
+            build
+
+      - name: Locate binary and ensure Metal kernels are present
+        id: bin
+        run: |
+          BIN="$PWD/build/Build/Products/Release/toGainMapHDR"
+          test -x "$BIN" || { echo "::error::binary not found at $BIN"; exit 1; }
+          DIR="$(dirname "$BIN")"
+          # The Metal build rule should emit the .metallib kernels next to the
+          # binary; fall back to the prebuilt copies in bin/ if it didn't.
+          for lib in GainMapKernel.ci.metallib RGBGainMapKernel.ci.metallib; do
+            if [ ! -f "$DIR/$lib" ]; then
+              echo "::warning::$lib not produced by build, copying prebuilt from bin/"
+              cp "bin/$lib" "$DIR/"
+            fi
+          done
+          echo "path=$BIN" >> "$GITHUB_OUTPUT"
+
+      - name: Convert ${{ matrix.image }} (${{ matrix.mode.name }})
+        run: |
+          set -euo pipefail
+          OUT="out/${{ matrix.mode.name }}"
+          mkdir -p "$OUT"
+          "${{ steps.bin.outputs.path }}" \
+            "TestAssets/${{ matrix.image }}" \
+            "$OUT/" \
+            ${{ matrix.mode.flag }} -q 0.95 -d 10 -H
+          # The CLI exits 0 on a successful export; verify a non-empty .heic exists.
+          base="$(basename "${{ matrix.image }}" .png)"
+          out_file="$OUT/${base}.heic"
+          test -s "$out_file" || { echo "::error::no output produced at $out_file"; exit 1; }
+          ls -la "$OUT"
+
+      - name: Upload HEIC output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: heic-${{ matrix.mode.name }}-${{ matrix.image }}
+          path: out/${{ matrix.mode.name }}/*.heic
+          if-no-files-found: error
